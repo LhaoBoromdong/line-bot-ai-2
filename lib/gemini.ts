@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
@@ -38,7 +38,7 @@ export async function askGemini(faqCsv: string, userMessage: string): Promise<st
     config: {
       temperature: 1.0,
       maxOutputTokens: 1024,
-      thinkingConfig: { thinkingLevel: "low" },
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
     },
   });
 
