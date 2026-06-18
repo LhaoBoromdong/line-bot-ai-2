@@ -11,9 +11,16 @@ const client = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
 });
 
-const BOT_OVERRIDE_KEYWORDS = ["ถามบอท", "คุยกับบอท", "ai"];
+// เก็บ userId ลูกค้าที่เรียกบอทฉุกเฉินตอนกลางวันไว้ — อยู่ได้แค่ตราบที่ instance ยัง warm
+// (Vercel serverless: instance ใหม่/cold start จะรีเซ็ตค่านี้ ลูกค้าอาจต้องพิมพ์คีย์เวิร์ดซ้ำ)
+const activeBotUsers = new Set<string>();
 
-// บอทตอบเองช่วงกลางคืน 22:00-07:59 (Asia/Bangkok) — กลางวันให้แอดมินตอบ เว้นแต่มีคำสั่งเรียกบอท
+const OPEN_KEYWORDS = ["ถามบอท", "ถาม ai", "ai"];
+const CLOSE_KEYWORDS = ["ติดต่อแอดมิน", "ติดต่อพนักงาน"];
+const BOT_READY_REPLY = "ระบบ AI TSL Auto พร้อมให้บริการแล้วครับ คุณลูกค้ามีเรื่องใดให้ผมดูแล แจ้งได้เลยครับ";
+const HANDOFF_REPLY = "รับทราบครับ ระบบได้ส่งเรื่องให้แอดมินเรียบร้อยแล้ว กรุณารอสักครู่นะครับ";
+
+// บอทตอบเองช่วงกลางคืน 22:00-07:59 (Asia/Bangkok) — กลางวันให้แอดมินตอบ เว้นแต่ลูกค้าเรียกบอทฉุกเฉิน
 function isBotHoursBangkok(): boolean {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Bangkok",
@@ -24,9 +31,17 @@ function isBotHoursBangkok(): boolean {
   return hour >= 22 || hour < 8;
 }
 
-function hasBotOverrideKeyword(message: string): boolean {
+function matchesKeyword(message: string, keywords: string[]): boolean {
   const lower = message.toLowerCase();
-  return BOT_OVERRIDE_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
+  return keywords.some((kw) => lower.includes(kw.toLowerCase()));
+}
+
+async function safeReply(replyToken: string, text: string) {
+  try {
+    await client.replyMessage({ replyToken, messages: [{ type: "text", text }] });
+  } catch (err) {
+    console.error("[webhook] reply failed:", err);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -53,10 +68,27 @@ async function handleEvent(event: WebhookEvent) {
 
   const replyToken = event.replyToken;
   const userMessage = event.message.text;
+  const userId = event.source.userId;
 
-  // เวลากลางวัน (08:00-21:59) ให้แอดมินตอบเอง — เว้นแต่ลูกค้าเรียกบอทด้วยคำสั่งพิเศษ
-  if (!isBotHoursBangkok() && !hasBotOverrideKeyword(userMessage)) {
-    return;
+  if (!isBotHoursBangkok()) {
+    const isActive = userId ? activeBotUsers.has(userId) : false;
+
+    // ลูกค้าที่คุยกับบอทอยู่ ขอคืนแชทให้แอดมิน
+    if (isActive && matchesKeyword(userMessage, CLOSE_KEYWORDS)) {
+      if (userId) activeBotUsers.delete(userId);
+      await safeReply(replyToken, HANDOFF_REPLY);
+      return;
+    }
+
+    // ลูกค้ายังไม่ได้เรียกบอท — เช็กคีย์เวิร์ดเปิดบอทฉุกเฉิน ไม่งั้นเงียบรอแอดมิน
+    if (!isActive) {
+      if (userId && matchesKeyword(userMessage, OPEN_KEYWORDS)) {
+        activeBotUsers.add(userId);
+        await safeReply(replyToken, BOT_READY_REPLY);
+      }
+      return;
+    }
+    // isActive และไม่ได้พิมพ์คำปิดบอท — ส่งต่อให้ Gemini ตอบต่อเนื่องตามปกติด้านล่าง
   }
 
   try {
