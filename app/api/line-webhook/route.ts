@@ -11,6 +11,24 @@ const client = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
 });
 
+const BOT_OVERRIDE_KEYWORDS = ["ถามบอท", "คุยกับบอท", "ai"];
+
+// บอทตอบเองช่วงกลางคืน 22:00-07:59 (Asia/Bangkok) — กลางวันให้แอดมินตอบ เว้นแต่มีคำสั่งเรียกบอท
+function isBotHoursBangkok(): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Bangkok",
+    hour: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  return hour >= 22 || hour < 8;
+}
+
+function hasBotOverrideKeyword(message: string): boolean {
+  const lower = message.toLowerCase();
+  return BOT_OVERRIDE_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
+}
+
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const signature = req.headers.get("x-line-signature") ?? "";
@@ -35,6 +53,11 @@ async function handleEvent(event: WebhookEvent) {
 
   const replyToken = event.replyToken;
   const userMessage = event.message.text;
+
+  // เวลากลางวัน (08:00-21:59) ให้แอดมินตอบเอง — เว้นแต่ลูกค้าเรียกบอทด้วยคำสั่งพิเศษ
+  if (!isBotHoursBangkok() && !hasBotOverrideKeyword(userMessage)) {
+    return;
+  }
 
   try {
     const faqCsv = await getFaqCsv();
