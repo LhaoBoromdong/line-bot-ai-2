@@ -31,9 +31,14 @@ function isBotHoursBangkok(): boolean {
   return hour >= 22 || hour < 8;
 }
 
+// ตัดช่องว่างออกก่อนเทียบ — กันเคสลูกค้าพิมพ์เว้นวรรคกลางคีย์เวิร์ด เช่น "ถาม บอท"
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, "");
+}
+
 function matchesKeyword(message: string, keywords: string[]): boolean {
-  const lower = message.toLowerCase();
-  return keywords.some((kw) => lower.includes(kw.toLowerCase()));
+  const normalizedMessage = normalizeForMatch(message);
+  return keywords.some((kw) => normalizedMessage.includes(normalizeForMatch(kw)));
 }
 
 // HTTPFetchError.message คือแค่ "400 - Bad Request" ตัวเหตุผลจริง (เช่น invalid/expired reply token,
