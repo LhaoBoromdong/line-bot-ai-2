@@ -51,11 +51,28 @@ function logLineError(context: string, err: unknown) {
   }
 }
 
-async function safeReply(replyToken: string, text: string) {
-  try {
-    await client.replyMessage({ replyToken, messages: [{ type: "text", text }] });
-  } catch (err) {
-    logLineError("webhook reply", err);
+// ปกติใช้ replyMessage (ฟรี ไม่จำกัดโควต้า) ก่อนเสมอ — fallback ไป pushMessage เฉพาะตอนไม่มี
+// replyToken (เช่น mode: standby ตอนแอดมินคุมแชทอยู่) หรือ reply ล้มเหลว เพื่อลดการกินโควต้าข้อความฟรีรายเดือน
+async function sendReply(replyToken: string | undefined, userId: string | undefined, text: string) {
+  const messages = [{ type: "text" as const, text }];
+
+  if (replyToken) {
+    try {
+      await client.replyMessage({ replyToken, messages });
+      return;
+    } catch (err) {
+      logLineError("webhook reply", err);
+    }
+  }
+
+  if (userId) {
+    try {
+      await client.pushMessage({ to: userId, messages });
+    } catch (err) {
+      logLineError("webhook push", err);
+    }
+  } else {
+    console.warn("[webhook] no replyToken and no userId, cannot deliver:", text);
   }
 }
 
@@ -85,20 +102,13 @@ async function handleEvent(event: WebhookEvent) {
   const userMessage = event.message.text;
   const userId = event.source.userId;
 
-  // LINE ส่ง replyToken ว่างสำหรับ event บางประเภท (เช่น standby mode ตอนมี destination อื่นต่อ channel
-  // เดียวกันอยู่ด้วย) — reply ไปก็ได้ 400 แน่นอน ข้ามทิ้งแต่ log event เต็มไว้เผื่อต้องสืบสาเหตุ
-  if (!replyToken) {
-    console.warn("[webhook] empty replyToken, skip:", JSON.stringify(event));
-    return;
-  }
-
   if (!isBotHoursBangkok()) {
     const isActive = userId ? activeBotUsers.has(userId) : false;
 
     // ลูกค้าที่คุยกับบอทอยู่ ขอคืนแชทให้แอดมิน
     if (isActive && matchesKeyword(userMessage, CLOSE_KEYWORDS)) {
       if (userId) activeBotUsers.delete(userId);
-      await safeReply(replyToken, HANDOFF_REPLY);
+      await sendReply(replyToken, userId, HANDOFF_REPLY);
       return;
     }
 
@@ -106,7 +116,7 @@ async function handleEvent(event: WebhookEvent) {
     if (!isActive) {
       if (userId && matchesKeyword(userMessage, OPEN_KEYWORDS)) {
         activeBotUsers.add(userId);
-        await safeReply(replyToken, BOT_READY_REPLY);
+        await sendReply(replyToken, userId, BOT_READY_REPLY);
       }
       return;
     }
@@ -116,25 +126,16 @@ async function handleEvent(event: WebhookEvent) {
   try {
     const faqCsv = await getFaqCsv();
     const reply = await withTimeout(askGemini(faqCsv, userMessage), 8000, DEFAULT_REPLY);
-
-    await client.replyMessage({
-      replyToken,
-      messages: [{ type: "text", text: reply }],
-    });
+    await sendReply(replyToken, userId, reply);
   } catch (err) {
     logLineError("webhook", err);
-    await safeReply(replyToken, DEFAULT_REPLY);
+    await sendReply(replyToken, userId, DEFAULT_REPLY);
   }
 }
 
 async function handleFollow(event: FollowEvent) {
   const replyToken = event.replyToken;
   const userId = event.source.userId;
-
-  if (!replyToken) {
-    console.warn("[follow] empty replyToken, skip:", JSON.stringify(event));
-    return;
-  }
 
   let name = "";
   try {
@@ -146,7 +147,7 @@ async function handleFollow(event: FollowEvent) {
     logLineError("follow getProfile", err);
   }
 
-  await safeReply(replyToken, buildGreeting(name));
+  await sendReply(replyToken, userId, buildGreeting(name));
 }
 
 function buildGreeting(name: string): string {
