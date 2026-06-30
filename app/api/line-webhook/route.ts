@@ -85,6 +85,13 @@ async function handleEvent(event: WebhookEvent) {
   const userMessage = event.message.text;
   const userId = event.source.userId;
 
+  // LINE ส่ง replyToken ว่างสำหรับ event บางประเภท (เช่น standby mode ตอนมี destination อื่นต่อ channel
+  // เดียวกันอยู่ด้วย) — reply ไปก็ได้ 400 แน่นอน ข้ามทิ้งแต่ log event เต็มไว้เผื่อต้องสืบสาเหตุ
+  if (!replyToken) {
+    console.warn("[webhook] empty replyToken, skip:", JSON.stringify(event));
+    return;
+  }
+
   if (!isBotHoursBangkok()) {
     const isActive = userId ? activeBotUsers.has(userId) : false;
 
@@ -123,6 +130,11 @@ async function handleEvent(event: WebhookEvent) {
 async function handleFollow(event: FollowEvent) {
   const replyToken = event.replyToken;
   const userId = event.source.userId;
+
+  if (!replyToken) {
+    console.warn("[follow] empty replyToken, skip:", JSON.stringify(event));
+    return;
+  }
 
   let name = "";
   try {
