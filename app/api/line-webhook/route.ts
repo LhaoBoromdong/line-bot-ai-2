@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { validateSignature, messagingApi, WebhookEvent, FollowEvent } from "@line/bot-sdk";
+import { validateSignature, messagingApi, WebhookEvent, FollowEvent, HTTPFetchError } from "@line/bot-sdk";
 import { getFaqCsv } from "@/lib/sheet";
 import { askGemini, withTimeout, DEFAULT_REPLY } from "@/lib/gemini";
 
@@ -36,11 +36,21 @@ function matchesKeyword(message: string, keywords: string[]): boolean {
   return keywords.some((kw) => lower.includes(kw.toLowerCase()));
 }
 
+// HTTPFetchError.message คือแค่ "400 - Bad Request" ตัวเหตุผลจริง (เช่น invalid/expired reply token,
+// ข้อความว่าง, ยาวเกิน 5000 ตัวอักษร) อยู่ใน .body — log แยกเพื่อ debug ผ่าน Vercel Logs ได้
+function logLineError(context: string, err: unknown) {
+  if (err instanceof HTTPFetchError) {
+    console.error(`[${context}]`, err.status, err.body);
+  } else {
+    console.error(`[${context}]`, err);
+  }
+}
+
 async function safeReply(replyToken: string, text: string) {
   try {
     await client.replyMessage({ replyToken, messages: [{ type: "text", text }] });
   } catch (err) {
-    console.error("[webhook] reply failed:", err);
+    logLineError("webhook reply", err);
   }
 }
 
@@ -100,15 +110,8 @@ async function handleEvent(event: WebhookEvent) {
       messages: [{ type: "text", text: reply }],
     });
   } catch (err) {
-    console.error("[webhook] error:", err);
-    try {
-      await client.replyMessage({
-        replyToken,
-        messages: [{ type: "text", text: DEFAULT_REPLY }],
-      });
-    } catch (replyErr) {
-      console.error("[webhook] reply failed:", replyErr);
-    }
+    logLineError("webhook", err);
+    await safeReply(replyToken, DEFAULT_REPLY);
   }
 }
 
@@ -123,17 +126,10 @@ async function handleFollow(event: FollowEvent) {
       name = profile.displayName ?? "";
     }
   } catch (err) {
-    console.warn("[follow] getProfile failed:", err);
+    logLineError("follow getProfile", err);
   }
 
-  try {
-    await client.replyMessage({
-      replyToken,
-      messages: [{ type: "text", text: buildGreeting(name) }],
-    });
-  } catch (err) {
-    console.error("[follow] reply failed:", err);
-  }
+  await safeReply(replyToken, buildGreeting(name));
 }
 
 function buildGreeting(name: string): string {
